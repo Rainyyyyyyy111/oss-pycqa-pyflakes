@@ -21,9 +21,8 @@ from pyflakes import messages
 PYPY = hasattr(sys, 'pypy_version_info')
 
 builtin_vars = frozenset(dir(builtins)) | {
-    # Globally defined names which are not attributes of the builtins module, or
-    # are only present on some platforms.
-    '__file__', '__builtins__', '__annotations__', 'WindowsError'
+    # WindowsError is only present on some platforms.
+    'WindowsError'
 }
 
 
@@ -749,8 +748,13 @@ class Checker:
 
         scope_tp = Checker._ast_node_scope[type(tree)]
         with self.in_scope(scope_tp):
-            for builtin in self.builtIns:
-                self.addBinding(None, Builtin(builtin))
+            self._builtin_scope = Scope({
+                name: Builtin(name) for name in self.builtIns
+            })
+            for binding in self._builtin_scope.values():
+                self.addBinding(None, binding)
+            for name in ('__file__', '__builtins__', '__annotations__'):
+                self.addBinding(None, Builtin(name))
             self.handleChildren(tree)
             self._run_deferred()
 
@@ -1032,8 +1036,8 @@ class Checker:
         importStarred = None
         func_depth = 0
 
-        # try enclosing function scopes and global scope
-        for scope in reversed(self.scopeStack):
+        # Try enclosing scopes, then fall back to builtins.
+        for scope in [*reversed(self.scopeStack), self._builtin_scope]:
             if isinstance(scope, (FunctionScope, GeneratorScope)):
                 func_depth += 1
 
@@ -1175,6 +1179,10 @@ class Checker:
 
         if isinstance(self.scope, (ClassScope, FunctionScope)):
             self.scope.indirect_assignments.pop(node.id, None)
+
+        if isinstance(self.scope.get(node.id), Builtin) and node.id in self.builtIns:
+            self.report(messages.UndefinedName, node, node.id)
+            return
 
         try:
             del self.scope[node.id]
